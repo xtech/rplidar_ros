@@ -39,6 +39,7 @@
 #include "math.h"
 
 #include <signal.h>
+#include <rcl_interfaces/msg/set_parameters_result.hpp>
 
 #ifndef _countof
 #define _countof(_Array) (int)(sizeof(_Array) / sizeof(_Array[0]))
@@ -64,8 +65,27 @@ class RPlidarNode : public rclcpp::Node
     RPlidarNode(const rclcpp::NodeOptions& options = rclcpp::NodeOptions())
     : Node("rplidar_node", options)
     {
-
-      
+        // Register dynamic parameter callback to allow runtime updates
+        param_cb_handle_ = this->add_on_set_parameters_callback(
+            [this](const std::vector<rclcpp::Parameter> &params) -> rcl_interfaces::msg::SetParametersResult {
+                rcl_interfaces::msg::SetParametersResult result;
+                result.successful = true;
+                for (const auto &p : params) {
+                    if (p.get_name() == "time_offset") {
+                        if (p.get_type() == rclcpp::ParameterType::PARAMETER_DOUBLE) {
+                            double new_val = p.as_double();
+                            time_offset_ms = new_val;
+                            RCLCPP_INFO(this->get_logger(), "Updated time_offset to %.3f ms at runtime", time_offset_ms);
+                        } else {
+                            result.successful = false;
+                            result.reason = "time_offset must be a double";
+                            break;
+                        }
+                    }
+                }
+                return result;
+            }
+        );
     }
 
   private:    
@@ -86,6 +106,7 @@ class RPlidarNode : public rclcpp::Node
         this->declare_parameter<std::string>("topic_name",std::string("scan"));
         this->declare_parameter<std::string>("scan_mode",std::string());
         this->declare_parameter<float>("scan_frequency",10);
+        this->declare_parameter<double>("time_offset", 0.0);
         
         this->get_parameter_or<std::string>("channel_type", channel_type, "serial");
         this->get_parameter_or<std::string>("tcp_ip", tcp_ip, "192.168.0.7"); 
@@ -105,6 +126,8 @@ class RPlidarNode : public rclcpp::Node
             this->get_parameter_or<float>("scan_frequency", scan_frequency, 20.0);
         else
             this->get_parameter_or<float>("scan_frequency", scan_frequency, 10.0);
+
+        this->get_parameter_or<double>("time_offset", time_offset_ms, 0.0);
     }
 
     bool getRPLIDARDeviceInfo(ILidarDriver * drv)
@@ -467,6 +490,12 @@ public:
             start_scan_time = this->now();
             op_result = drv->grabScanDataHq(nodes, count);
             end_scan_time = this->now();
+
+            // Apply time offset (milliseconds) to start and end timestamps
+            rclcpp::Duration time_offset = rclcpp::Duration::from_nanoseconds((int64_t)(time_offset_ms * 1e6));
+            rclcpp::Time start_scan_time_adj = start_scan_time + time_offset;
+
+            // Duration remains the same when applying equal offsets to start/end
             scan_duration = (end_scan_time - start_scan_time).seconds();
 
             if (op_result == SL_RESULT_OK) {
@@ -503,7 +532,7 @@ public:
                         }
     
                         publish_scan(scan_pub, angle_compensate_nodes, angle_compensate_nodes_count,
-                                start_scan_time, scan_duration, inverted, flip_x_axis,
+                                start_scan_time_adj, scan_duration, inverted, flip_x_axis,
                                 angle_min, angle_max, max_distance,
                                 frame_id);
 
@@ -525,7 +554,7 @@ public:
                         angle_max = DEG2RAD(getAngle(nodes[end_node]));
 
                         publish_scan(scan_pub, &nodes[start_node], end_node-start_node +1,
-                                start_scan_time, scan_duration, inverted, flip_x_axis, 
+                                start_scan_time_adj, scan_duration, inverted, flip_x_axis, 
                                 angle_min, angle_max, max_distance,
                                 frame_id);
                     }
@@ -534,7 +563,7 @@ public:
                     float angle_min = DEG2RAD(0.0f);
                     float angle_max = DEG2RAD(359.0f);
                     publish_scan(scan_pub, nodes, count,
-                                start_scan_time, scan_duration, inverted, flip_x_axis,
+                                start_scan_time_adj, scan_duration, inverted, flip_x_axis,
                                 angle_min, angle_max, max_distance,
                                 frame_id);
                 }
@@ -573,10 +602,14 @@ public:
     size_t angle_compensate_multiple = 1;//it stand of angle compensate at per 1 degree
     std::string scan_mode;
     float scan_frequency;
+    double time_offset_ms = 0.0; // timestamp offset applied to start and end times
     /* State */
     bool is_scanning = false;
 
     ILidarDriver *drv = nullptr;
+
+    // Keep the parameter callback handle alive
+    rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_cb_handle_;
 };
 
 void ExitHandler(int sig)

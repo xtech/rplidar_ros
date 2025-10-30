@@ -322,7 +322,6 @@ class RPlidarNode : public rclcpp::Node
 
     bool set_scan_mode() {
         sl_result     op_result;
-        LidarScanMode current_scan_mode;
         if (scan_mode.empty()) {
             op_result = drv->startScan(false /* not force scan */, true /* use typical scan mode */, 0, &current_scan_mode);
         }
@@ -361,8 +360,8 @@ class RPlidarNode : public rclcpp::Node
             if (angle_compensate_multiple < 1)
                 angle_compensate_multiple = 1.0;
             max_distance = (float)current_scan_mode.max_distance;
-            RCLCPP_INFO(this->get_logger(), "current scan mode: %s, sample rate: %d Khz, max_distance: %.1f m, scan frequency:%.1f Hz, ",
-                current_scan_mode.scan_mode, (int)(1000 / current_scan_mode.us_per_sample + 0.5), max_distance, scan_frequency);
+            RCLCPP_INFO(this->get_logger(), "current scan mode: %s, sample time: %d uS, max_distance: %.1f m, scan frequency:%.1f Hz, ",
+                current_scan_mode.scan_mode, (int)(current_scan_mode.us_per_sample), max_distance, scan_frequency);
             return true;
         }
         else
@@ -508,7 +507,8 @@ public:
             rclcpp::Time start_scan_time_adj = start_scan_time + time_offset;
 
             // Duration remains the same when applying equal offsets to start/end
-            scan_duration = (end_scan_time - start_scan_time).seconds();
+            // scan_duration = (end_scan_time - start_scan_time).seconds();
+            scan_duration = (current_scan_mode.us_per_sample * count) / 1000000.0;
 
             if (op_result == SL_RESULT_OK) {
                 if(scan_frequency_tunning_after_scan) { //Set scan frequency(For Slamtec Tof lidar)
@@ -618,7 +618,7 @@ public:
     double time_increment_multiplier = 1.0; // multiplier applied to time increment, for debugging deskew timing issues
     /* State */
     bool is_scanning = false;
-
+    LidarScanMode current_scan_mode{};
     ILidarDriver *drv = nullptr;
 
     // Keep the parameter callback handle alive

@@ -555,14 +555,7 @@ public:
                             angle_compensate_nodes = nullptr;
                         }
                     } else {
-                        int start_node = 0, end_node = 0;
-                        int i = 0;
-                        // find the first valid node and last valid node
-                        while (nodes[i++].dist_mm_q2 == 0);
-                        start_node = i-1;
-                        i = count -1;
-                        while (nodes[i--].dist_mm_q2 == 0);
-                        end_node = i+1;
+                        int start_node = 0, end_node = count-1;
 
                         angle_min = DEG2RAD(getAngle(nodes[start_node]));
                         angle_max = DEG2RAD(getAngle(nodes[end_node]));

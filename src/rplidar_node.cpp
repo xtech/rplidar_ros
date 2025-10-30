@@ -568,7 +568,7 @@ public:
                         angle_max = DEG2RAD(getAngle(nodes[end_node]));
 
                         publish_scan(scan_pub, &nodes[start_node], end_node-start_node +1,
-                                start_scan_time_adj, scan_duration, inverted, flip_x_axis, 
+                                start_scan_time_adj, (double)((end_node-start_node +1) * current_scan_mode.us_per_sample) / 1000000.0, inverted, flip_x_axis,
                                 angle_min, angle_max, max_distance,
                                 frame_id);
                     }

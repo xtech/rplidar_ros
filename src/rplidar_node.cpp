@@ -81,6 +81,16 @@ class RPlidarNode : public rclcpp::Node
                             result.reason = "time_offset must be a double";
                             break;
                         }
+                    } else if (p.get_name() == "time_increment_multiplier") {
+                        if (p.get_type() == rclcpp::ParameterType::PARAMETER_DOUBLE) {
+                            double new_val = p.as_double();
+                            time_increment_multiplier = new_val;
+                            RCLCPP_INFO(this->get_logger(), "Updated time_increment_multiplier to %.3f ms at runtime", time_increment_multiplier);
+                        } else {
+                            result.successful = false;
+                            result.reason = "time_increment_multiplier must be a double";
+                            break;
+                        }
                     }
                 }
                 return result;
@@ -107,7 +117,8 @@ class RPlidarNode : public rclcpp::Node
         this->declare_parameter<std::string>("scan_mode",std::string());
         this->declare_parameter<float>("scan_frequency",10);
         this->declare_parameter<double>("time_offset", 0.0);
-        
+        this->declare_parameter<double>("time_increment_multiplier", 1.0);
+
         this->get_parameter_or<std::string>("channel_type", channel_type, "serial");
         this->get_parameter_or<std::string>("tcp_ip", tcp_ip, "192.168.0.7"); 
         this->get_parameter_or<int>("tcp_port", tcp_port, 20108);
@@ -128,6 +139,7 @@ class RPlidarNode : public rclcpp::Node
             this->get_parameter_or<float>("scan_frequency", scan_frequency, 10.0);
 
         this->get_parameter_or<double>("time_offset", time_offset_ms, 0.0);
+        this->get_parameter_or<double>("time_offset", time_increment_multiplier, 1.0);
     }
 
     bool getRPLIDARDeviceInfo(ILidarDriver * drv)
@@ -276,7 +288,7 @@ class RPlidarNode : public rclcpp::Node
         scan_msg->angle_increment = (scan_msg->angle_max - scan_msg->angle_min) / (double)(node_count-1);
 
         scan_msg->scan_time = scan_time;
-        scan_msg->time_increment = scan_time / (double)(node_count-1);
+        scan_msg->time_increment = (scan_time / (double)(node_count-1)) * time_increment_multiplier;
         scan_msg->range_min = 0.15;
         scan_msg->range_max = max_distance;//8.0;
 
@@ -603,6 +615,7 @@ public:
     std::string scan_mode;
     float scan_frequency;
     double time_offset_ms = 0.0; // timestamp offset applied to start and end times
+    double time_increment_multiplier = 1.0; // multiplier applied to time increment, for debugging deskew timing issues
     /* State */
     bool is_scanning = false;
 

@@ -139,7 +139,7 @@ class RPlidarNode : public rclcpp::Node
             this->get_parameter_or<float>("scan_frequency", scan_frequency, 10.0);
 
         this->get_parameter_or<double>("time_offset", time_offset_ms, 0.0);
-        this->get_parameter_or<double>("time_offset", time_increment_multiplier, 1.0);
+        this->get_parameter_or<double>("time_increment_multiplier", time_increment_multiplier, 1.0);
     }
 
     bool getRPLIDARDeviceInfo(ILidarDriver * drv)
@@ -509,6 +509,8 @@ public:
             // Duration remains the same when applying equal offsets to start/end
             // scan_duration = (end_scan_time - start_scan_time).seconds();
             scan_duration = (current_scan_mode.us_per_sample * count) / 1000000.0;
+
+            RCLCPP_INFO_STREAM_THROTTLE(this->get_logger(), *this->get_clock(), 1000, "Scan count: " << std::to_string(count));
 
             if (op_result == SL_RESULT_OK) {
                 if(scan_frequency_tunning_after_scan) { //Set scan frequency(For Slamtec Tof lidar)

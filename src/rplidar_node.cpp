@@ -424,7 +424,7 @@ public:
         double scan_duration;
         sensor_msgs::msg::PointCloud2 cloud_msg;
         cloud_msg.header.frame_id = frame_id;
-        cloud_msg.fields.resize(3);
+        cloud_msg.fields.resize(4);
         // x
         cloud_msg.fields[0].name = "x";
         cloud_msg.fields[0].offset = 0;
@@ -443,8 +443,15 @@ public:
         cloud_msg.fields[2].datatype = sensor_msgs::msg::PointField::FLOAT32;
         cloud_msg.fields[2].count = 1;
 
+        // intensity
+        cloud_msg.fields[3].name = "intensity";
+        cloud_msg.fields[3].offset = 12;
+        cloud_msg.fields[3].datatype = sensor_msgs::msg::PointField::FLOAT32;
+        cloud_msg.fields[3].count = 1;
+
+
         cloud_msg.is_bigendian = false;
-        cloud_msg.point_step = 12;
+        cloud_msg.point_step = 16;
         cloud_msg.height = 1;
         cloud_msg.width = 0;
 
@@ -487,7 +494,7 @@ public:
 
                 size_t write_index = 0;
                 // reserve enough space in case all measurements are valid
-                cloud_msg.data.resize(count * 3 * sizeof(float));
+                cloud_msg.data.resize(count * 4 * sizeof(float));
                 static_assert(sizeof(float) == 4, "float must be 4 bytes");
                 for (size_t i = 0; i < count; i++) {
                     float *p = reinterpret_cast<float *>(&cloud_msg.data[write_index]);
@@ -500,8 +507,9 @@ public:
                         p[0] = sin(angle) * range;
                         p[1] = cos(angle) * range;
                         p[2] = 0.0f;
+                        p[3] = nodes[i].quality;
                         // wrote a value, advance the index
-                        write_index+=3 * sizeof(float);
+                        write_index+=4 * sizeof(float);
                     }
                 }
                 // shrink in case not all measurements were valid

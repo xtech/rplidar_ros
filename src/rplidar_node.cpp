@@ -33,6 +33,7 @@
  */
 
 #include <rclcpp/rclcpp.hpp>
+#include <sensor_msgs/msg/laser_scan.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include <std_srvs/srv/empty.hpp>
@@ -92,6 +93,22 @@ class RPlidarNode : public rclcpp::Node
                             result.reason = "time_increment_multiplier must be a double";
                             break;
                         }
+                    } else if (p.get_name() == "output_points") {
+                        if (p.get_type() == rclcpp::ParameterType::PARAMETER_INTEGER) {
+                            int new_val = p.as_int();
+
+                            if (new_val <= 0) {
+                                result.successful = false;
+                                result.reason = "Output point count must be positive";
+                                break;
+                            }
+
+                            output_points = new_val;
+                            RCLCPP_INFO(this->get_logger(), "Updated output_points to %d at runtime", output_points);
+                        } else {
+                            result.successful = false;
+                            result.reason = "output_points must be an integer";
+                        }
                     }
                 }
                 return result;
@@ -118,6 +135,7 @@ class RPlidarNode : public rclcpp::Node
         this->declare_parameter<float>("scan_frequency",10);
         this->declare_parameter<double>("time_offset", 0.0);
         this->declare_parameter<double>("time_increment_multiplier", 1.0);
+        this->declare_parameter<int>("output_points", 360);
 
         this->get_parameter_or<std::string>("channel_type", channel_type, "serial");
         this->get_parameter_or<std::string>("tcp_ip", tcp_ip, "192.168.0.7"); 
@@ -137,6 +155,7 @@ class RPlidarNode : public rclcpp::Node
         else
             this->get_parameter_or<float>("scan_frequency", scan_frequency, 10.0);
 
+        this->get_parameter_or<int>("output_points", output_points, 360);
         this->get_parameter_or<double>("time_offset", time_offset_ms, 0.0);
         this->get_parameter_or<double>("time_increment_multiplier", time_increment_multiplier, 1.0);
     }
@@ -408,7 +427,9 @@ public:
             return -1;
         }
 
-        scan_pub = this->create_publisher<sensor_msgs::msg::PointCloud2>(topic_name, rclcpp::QoS(rclcpp::KeepLast(10)));
+        scan_pub = this->create_publisher<sensor_msgs::msg::LaserScan>(topic_name, rclcpp::QoS(rclcpp::KeepLast(10)));
+        cloud_pub = this->create_publisher<sensor_msgs::msg::PointCloud2>("cloud", rclcpp::QoS(rclcpp::KeepLast(10)));
+
         imu_sub =   this->create_subscription<sensor_msgs::msg::Imu>(
                         "imu", rclcpp::SensorDataQoS(), std::bind(&RPlidarNode::on_imu, this, std::placeholders::_1));
 
@@ -422,6 +443,9 @@ public:
         rclcpp::Time start_scan_time;
         rclcpp::Time end_scan_time;
         double scan_duration;
+        sensor_msgs::msg::LaserScan laser_msg;
+        laser_msg.header.frame_id = frame_id;
+
         sensor_msgs::msg::PointCloud2 cloud_msg;
         cloud_msg.header.frame_id = frame_id;
         cloud_msg.fields.resize(4);
@@ -472,17 +496,15 @@ public:
 
             start_scan_time = this->now();
             op_result = drv->grabScanDataHq(nodes, count);
-            end_scan_time = this->now();
 
             // Apply time offset (milliseconds) to start and end timestamps
             rclcpp::Duration time_offset = rclcpp::Duration::from_nanoseconds((int64_t)(time_offset_ms * 1e6));
             rclcpp::Time start_scan_time_adj = start_scan_time + time_offset;
 
-            // Duration remains the same when applying equal offsets to start/end
-            // scan_duration = (end_scan_time - start_scan_time).seconds();
-            scan_duration = (current_scan_mode.us_per_sample * count) / 1000000.0;
 
-            RCLCPP_INFO_STREAM_THROTTLE(this->get_logger(), *this->get_clock(), 1000, "Scan count: " << std::to_string(count));
+            bool has_cloud_subscriber = cloud_pub->get_subscription_count() > 0;
+            bool has_scan_subscriber = scan_pub->get_subscription_count() > 0;
+
 
             if (op_result == SL_RESULT_OK) {
                 if(scan_frequency_tunning_after_scan) { //Set scan frequency(For Slamtec Tof lidar)
@@ -492,32 +514,69 @@ public:
                     continue;
                 }
 
-                size_t write_index = 0;
+                // reserve enough space for the output points
+                laser_msg.ranges.resize(output_points);
+
+                // Zero the vector, since we might not have data for each bucket
+                memset(laser_msg.ranges.data(), 0, laser_msg.ranges.size() * sizeof(float));
+
+                size_t cloud_write_index = 0;
                 // reserve enough space in case all measurements are valid
                 cloud_msg.data.resize(count * 4 * sizeof(float));
                 static_assert(sizeof(float) == 4, "float must be 4 bytes");
                 for (size_t i = 0; i < count; i++) {
-                    float *p = reinterpret_cast<float *>(&cloud_msg.data[write_index]);
                     float angle = getAngle(nodes[i]);
                     float range = nodes[i].dist_mm_q2 / 4000.f;
                     // account for rotation using IMU data
                     float time_since_scan_start = (float)(current_scan_mode.us_per_sample * i) / 1000000.0f;
-                    angle -= time_since_scan_start * last_imu.angular_velocity.z * time_increment_multiplier;
+                    angle -= time_since_scan_start * static_cast<float>(last_imu.angular_velocity.z) * time_increment_multiplier;
+
+                    // Write to cloud
                     if (range > 0 && range < max_distance) {
-                        p[0] = sin(angle) * range;
-                        p[1] = cos(angle) * range;
-                        p[2] = 0.0f;
-                        p[3] = nodes[i].quality;
-                        // wrote a value, advance the index
-                        write_index+=4 * sizeof(float);
+                        if (has_cloud_subscriber) {
+                            float *p = reinterpret_cast<float *>(&cloud_msg.data[cloud_write_index]);
+                            p[0] = cos(angle) * range;
+                            p[1] = -sin(angle) * range;
+                            p[2] = 0.0f;
+                            p[3] = nodes[i].quality;
+                            // wrote a value, advance the index
+                            cloud_write_index+=4 * sizeof(float);
+                        }
+
+                        if (has_scan_subscriber) {
+                            // find the bucket
+                            ssize_t bucket_index = (ssize_t)((((2.0*M_PI) - angle) * laser_msg.ranges.size()) / (2.0*M_PI));
+                            if (bucket_index >= 0 && bucket_index < laser_msg.ranges.size()) {
+                                laser_msg.ranges[bucket_index] = range;
+                            } else {
+                                RCLCPP_WARN(this->get_logger(), "Invalid bucket index: %d", bucket_index);
+                            }
+                        }
                     }
                 }
-                // shrink in case not all measurements were valid
-                cloud_msg.data.resize(write_index);
-                cloud_msg.width = write_index/cloud_msg.point_step;
-                cloud_msg.row_step = cloud_msg.point_step * cloud_msg.width;
-                cloud_msg.header.stamp = start_scan_time_adj;
-                scan_pub->publish(cloud_msg);
+
+                if (cloud_write_index > 0) {
+                    // shrink in case not all measurements were valid
+                    cloud_msg.data.resize(cloud_write_index);
+                    cloud_msg.width = cloud_write_index/cloud_msg.point_step;
+                    cloud_msg.row_step = cloud_msg.point_step * cloud_msg.width;
+                    cloud_msg.header.stamp = start_scan_time_adj;
+                    cloud_pub->publish(cloud_msg);
+                }
+
+
+                if (has_scan_subscriber) {
+                    laser_msg.header.stamp = start_scan_time_adj;
+                    laser_msg.angle_min = 0.0;
+                    laser_msg.angle_max = 2.0* M_PI;
+                    laser_msg.angle_increment = (2.0* M_PI) / output_points;
+                    // we have already deskewed, so simulate that its an instant scan
+                    laser_msg.time_increment = 0.0;
+                    laser_msg.scan_time = 0.0;
+                    laser_msg.range_min = 0.0;
+                    laser_msg.range_max = max_distance;
+                    scan_pub->publish(laser_msg);
+                }
             }
 
             rclcpp::spin_some(shared_from_this());
@@ -536,7 +595,8 @@ public:
     }
 
   private:
-    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr scan_pub;
+    rclcpp::Publisher<sensor_msgs::msg::LaserScan>::SharedPtr scan_pub;
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr cloud_pub;
     rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub;
     rclcpp::Service<std_srvs::srv::Empty>::SharedPtr start_motor_service;
     rclcpp::Service<std_srvs::srv::Empty>::SharedPtr stop_motor_service;
@@ -556,6 +616,7 @@ public:
     float max_distance = 8.0;
     std::string scan_mode;
     float scan_frequency;
+    int output_points = 360;
     double time_offset_ms = 0.0; // timestamp offset applied to start and end times
     double time_increment_multiplier = 1.0; // multiplier applied to time increment, for debugging deskew timing issues
     /* State */

@@ -508,6 +508,7 @@ public:
                 cloud_msg.data.resize(write_index);
                 cloud_msg.width = write_index/cloud_msg.point_step;
                 cloud_msg.row_step = cloud_msg.point_step * cloud_msg.width;
+                cloud_msg.header.stamp = start_scan_time_adj;
                 scan_pub->publish(cloud_msg);
             }
 

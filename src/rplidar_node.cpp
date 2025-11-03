@@ -545,6 +545,10 @@ public:
 
                         if (has_scan_subscriber) {
                             // find the bucket
+                            angle = fmodf(angle, 2.0f * M_PI);
+                            while (angle < 0.0f) {
+                                angle += 2.0f * M_PI;
+                            }
                             ssize_t bucket_index = (ssize_t)((((2.0*M_PI) - angle) * laser_msg.ranges.size()) / (2.0*M_PI));
                             if (bucket_index >= 0 && bucket_index < laser_msg.ranges.size()) {
                                 laser_msg.ranges[bucket_index] = range;

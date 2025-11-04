@@ -130,6 +130,7 @@ class RPlidarNode : public rclcpp::Node
         this->declare_parameter<bool>("inverted", false);
         this->declare_parameter<bool>("flip_x_axis", false);
         this->declare_parameter<bool>("auto_standby", false);
+        this->declare_parameter<bool>("publish_cloud", false);
         this->declare_parameter<std::string>("topic_name",std::string("scan"));
         this->declare_parameter<std::string>("scan_mode",std::string());
         this->declare_parameter<float>("scan_frequency",10);
@@ -147,6 +148,7 @@ class RPlidarNode : public rclcpp::Node
         this->get_parameter_or<std::string>("frame_id", frame_id, "laser_frame");
         this->get_parameter_or<bool>("inverted", inverted, false);
         this->get_parameter_or<bool>("flip_x_axis", flip_x_axis, false);
+        this->get_parameter_or<bool>("publish_cloud", publish_cloud, false);
         this->get_parameter_or<bool>("auto_standby", auto_standby, false);
         this->get_parameter_or<std::string>("topic_name", topic_name, "scan");
         this->get_parameter_or<std::string>("scan_mode", scan_mode, std::string());
@@ -428,7 +430,11 @@ public:
         }
 
         scan_pub = this->create_publisher<sensor_msgs::msg::LaserScan>(topic_name, rclcpp::QoS(rclcpp::KeepLast(10)));
-        cloud_pub = this->create_publisher<sensor_msgs::msg::PointCloud2>("cloud", rclcpp::QoS(rclcpp::KeepLast(10)));
+        if (publish_cloud) {
+            cloud_pub = this->create_publisher<sensor_msgs::msg::PointCloud2>("cloud", rclcpp::QoS(rclcpp::KeepLast(10)));
+        } else {
+            cloud_pub = nullptr;
+        }
 
         imu_sub =   this->create_subscription<sensor_msgs::msg::Imu>(
                         "imu", rclcpp::SensorDataQoS(), std::bind(&RPlidarNode::on_imu, this, std::placeholders::_1));
@@ -447,38 +453,39 @@ public:
         laser_msg.header.frame_id = frame_id;
 
         sensor_msgs::msg::PointCloud2 cloud_msg;
-        cloud_msg.header.frame_id = frame_id;
-        cloud_msg.fields.resize(4);
-        // x
-        cloud_msg.fields[0].name = "x";
-        cloud_msg.fields[0].offset = 0;
-        cloud_msg.fields[0].datatype = sensor_msgs::msg::PointField::FLOAT32;
-        cloud_msg.fields[0].count = 1;
+        if (cloud_pub != nullptr) {
+            cloud_msg.header.frame_id = frame_id;
+            cloud_msg.fields.resize(4);
+            // x
+            cloud_msg.fields[0].name = "x";
+            cloud_msg.fields[0].offset = 0;
+            cloud_msg.fields[0].datatype = sensor_msgs::msg::PointField::FLOAT32;
+            cloud_msg.fields[0].count = 1;
 
-        // y
-        cloud_msg.fields[1].name = "y";
-        cloud_msg.fields[1].offset = 4;
-        cloud_msg.fields[1].datatype = sensor_msgs::msg::PointField::FLOAT32;
-        cloud_msg.fields[1].count = 1;
+            // y
+            cloud_msg.fields[1].name = "y";
+            cloud_msg.fields[1].offset = 4;
+            cloud_msg.fields[1].datatype = sensor_msgs::msg::PointField::FLOAT32;
+            cloud_msg.fields[1].count = 1;
 
-        // z
-        cloud_msg.fields[2].name = "z";
-        cloud_msg.fields[2].offset = 8;
-        cloud_msg.fields[2].datatype = sensor_msgs::msg::PointField::FLOAT32;
-        cloud_msg.fields[2].count = 1;
+            // z
+            cloud_msg.fields[2].name = "z";
+            cloud_msg.fields[2].offset = 8;
+            cloud_msg.fields[2].datatype = sensor_msgs::msg::PointField::FLOAT32;
+            cloud_msg.fields[2].count = 1;
 
-        // intensity
-        cloud_msg.fields[3].name = "intensity";
-        cloud_msg.fields[3].offset = 12;
-        cloud_msg.fields[3].datatype = sensor_msgs::msg::PointField::FLOAT32;
-        cloud_msg.fields[3].count = 1;
+            // intensity
+            cloud_msg.fields[3].name = "intensity";
+            cloud_msg.fields[3].offset = 12;
+            cloud_msg.fields[3].datatype = sensor_msgs::msg::PointField::FLOAT32;
+            cloud_msg.fields[3].count = 1;
 
 
-        cloud_msg.is_bigendian = false;
-        cloud_msg.point_step = 16;
-        cloud_msg.height = 1;
-        cloud_msg.width = 0;
-
+            cloud_msg.is_bigendian = false;
+            cloud_msg.point_step = 16;
+            cloud_msg.height = 1;
+            cloud_msg.width = 0;
+        }
         while (rclcpp::ok() && !need_exit) {
             sl_lidar_response_measurement_node_hq_t nodes[8192];
             size_t   count = _countof(nodes);
@@ -502,7 +509,7 @@ public:
             rclcpp::Time start_scan_time_adj = start_scan_time + time_offset;
 
 
-            bool has_cloud_subscriber = cloud_pub->get_subscription_count() > 0;
+            bool has_cloud_subscriber = cloud_pub != nullptr && cloud_pub->get_subscription_count() > 0;
             bool has_scan_subscriber = scan_pub->get_subscription_count() > 0;
 
 
@@ -522,7 +529,9 @@ public:
 
                 size_t cloud_write_index = 0;
                 // reserve enough space in case all measurements are valid
-                cloud_msg.data.resize(count * 4 * sizeof(float));
+                if (has_cloud_subscriber) {
+                    cloud_msg.data.resize(count * 4 * sizeof(float));
+                }
                 static_assert(sizeof(float) == 4, "float must be 4 bytes");
                 for (size_t i = 0; i < count; i++) {
                     float angle = getAngle(nodes[i]);
@@ -616,6 +625,7 @@ public:
     std::string frame_id;
     bool inverted = false;
     bool flip_x_axis = false;
+    bool publish_cloud = false;
     bool auto_standby = false;
     float max_distance = 8.0;
     std::string scan_mode;
